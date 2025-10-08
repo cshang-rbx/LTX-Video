@@ -173,6 +173,7 @@ with gr.Blocks() as demo:
     conditioning_image_input = gr.Image(
         label="Conditioning Image (optional)",
         type="filepath",
+        height=300,
     )
 
     with gr.Accordion("Advanced settings", open=False):
@@ -238,7 +239,7 @@ with gr.Blocks() as demo:
         )
 
     generate_button = gr.Button("Generate")
-    output_video = gr.Video(label="Generated video")
+    output_video = gr.Video(label="Generated video", height=400)
     status_box = gr.Textbox(label="Status", interactive=False)
 
     generate_button.click(
