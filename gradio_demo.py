@@ -207,6 +207,7 @@ with gr.Blocks() as demo:
         )
         pipeline_config_input = gr.Textbox(
             value=DEFAULT_PIPELINE_CONFIG,
+            choices=["configs/ltxv-13b-0.9.8-distilled.yaml", "configs/ltxv-2b-0.9.8-distilled.yaml"],
             label="Pipeline config path",
         )
         conditioning_strength_input = gr.Slider(
