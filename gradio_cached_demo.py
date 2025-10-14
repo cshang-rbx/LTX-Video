@@ -7,10 +7,12 @@ loaded only once per pipeline configuration.
 
 from __future__ import annotations
 
+import gc
 from pathlib import Path
 from typing import Optional, Tuple
 
 import gradio as gr
+import torch
 
 from batch_infer import (
     DEFAULT_NEGATIVE_PROMPT,
@@ -60,6 +62,17 @@ def _validate_conditioning_inputs(
         [int(conditioning_start_frame)],
         None,
     )
+
+
+def _cleanup_after_generation() -> None:
+    gc.collect()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+        if hasattr(torch.cuda, "ipc_collect"):
+            torch.cuda.ipc_collect()
+    if getattr(torch.backends, "mps", None) and torch.backends.mps.is_available():
+        torch.mps.empty_cache()
+
 
 
 def generate_video(
@@ -140,12 +153,15 @@ def generate_video(
         outputs = run_inference(config, bundle)
     except Exception as exc:  # noqa: BLE001 - surface errors in UI
         inference_logger.error("Inference failed", exc_info=True)
+        _cleanup_after_generation()
         return None, f"Generation failed: {exc}"
 
     if not outputs:
+        _cleanup_after_generation()
         return None, "Pipeline returned no outputs."
 
     primary_output = outputs[0]
+    del outputs
 
     try:
         prompt_record_path = primary_output.with_suffix(".txt")
@@ -153,6 +169,7 @@ def generate_video(
     except Exception as exc:  # noqa: BLE001 - surface errors in UI
         inference_logger.warning("Failed to store prompt text: %s", exc)
 
+    _cleanup_after_generation()
     return str(primary_output), f"Saved to {primary_output}"
 
 
