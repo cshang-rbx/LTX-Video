@@ -267,6 +267,7 @@ def run_reconstruction(
     resize: Optional[Tuple[int, int]] = None,
     use_bfloat16: bool = False,
     max_intermediate_edge: Optional[int] = 1536,
+    max_frames_per_chunk: int = 200,
 ) -> None:
     timings = {}
 
@@ -298,26 +299,53 @@ def run_reconstruction(
     video_proc = _make_stride_compatible(
         video_proc, temporal_stride, spatial_stride, stride_compat
     )
-    video_batch = video_proc.unsqueeze(0).to(device=device, dtype=dtype)
     timings["preprocessing"] = time.perf_counter() - preprocess_start
 
     infer_start = time.perf_counter()
-    with torch.inference_mode():
-        encoding_start = time.perf_counter()
-        posterior = vae.encode(video_batch)
-        latents = posterior.latent_dist.mode()
-        if device.type == "cuda":
-            torch.cuda.synchronize()
-        timings["model_encoding"] = time.perf_counter() - encoding_start
+    chunk_limit = video_proc.shape[1]
+    if max_frames_per_chunk and max_frames_per_chunk > 0:
+        chunk_limit = max(max_frames_per_chunk, temporal_stride)
+        chunk_limit = (chunk_limit // temporal_stride) * temporal_stride
+        if chunk_limit == 0:
+            chunk_limit = temporal_stride
+    encoding_total = 0.0
+    decoding_total = 0.0
+    latent_shape = None
+    recon_chunks = []
 
-        decoding_start = time.perf_counter()
-        recon = vae.decode(latents, target_shape=video_batch.shape).sample
-        if device.type == "cuda":
-            torch.cuda.synchronize()
-        timings["model_decoding"] = time.perf_counter() - decoding_start
+    with torch.inference_mode():
+        for start in range(0, video_proc.shape[1], chunk_limit):
+            end = min(start + chunk_limit, video_proc.shape[1])
+            chunk = video_proc[:, start:end]
+            chunk_batch = chunk.unsqueeze(0).to(device=device, dtype=dtype)
+
+            encoding_start = time.perf_counter()
+            posterior = vae.encode(chunk_batch)
+            latents = posterior.latent_dist.mode()
+            if latent_shape is None:
+                latent_shape = tuple(latents.shape)
+            if device.type == "cuda":
+                torch.cuda.synchronize()
+            encoding_total += time.perf_counter() - encoding_start
+
+            decoding_start = time.perf_counter()
+            recon_chunk = vae.decode(latents, target_shape=chunk_batch.shape).sample
+            if device.type == "cuda":
+                torch.cuda.synchronize()
+            decoding_total += time.perf_counter() - decoding_start
+
+            recon_chunk = recon_chunk.squeeze(0).to(torch.float32).cpu()
+            recon_chunks.append(recon_chunk)
+
+            del chunk_batch, posterior, latents
+            if device.type == "cuda":
+                torch.cuda.empty_cache()
+
+    timings["model_encoding"] = encoding_total
+    timings["model_decoding"] = decoding_total
     timings["model_inference"] = time.perf_counter() - infer_start
 
-    recon = recon.squeeze(0).to(torch.float32).cpu()
+    recon = torch.cat(recon_chunks, dim=1)
     recon = _match_frame_count(recon, orig_frames)
     recon = _resize_video(recon, orig_size)
 
@@ -334,7 +362,8 @@ def run_reconstruction(
 
     print(f"Original input shape: {(3, orig_frames, orig_size[1], orig_size[0])}")
     print(f"Preprocessed input shape: {tuple(video_proc.shape)}")
-    print(f"Latent shape: {tuple(latents.shape)}")
+    if latent_shape:
+        print(f"Latent shape: {latent_shape}")
     print(f"Output video shape: {tuple(recon.shape)}")
     print(f"Output FPS: {reference_fps}")
     print(f"Temporal stride: {temporal_stride}, Spatial stride: {spatial_stride}")
@@ -407,6 +436,15 @@ def parse_args() -> argparse.Namespace:
             "Set to 0 to disable automatic downscaling."
         ),
     )
+    parser.add_argument(
+        "--max-frames-per-chunk",
+        type=int,
+        default=200,
+        help=(
+            "Process the video in temporal chunks with at most this many frames each to avoid OOM. "
+            "Set to 0 to process all frames at once."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -436,6 +474,7 @@ def main() -> None:
         resize=resize,
         use_bfloat16=args.bfloat16,
         max_intermediate_edge=args.max_intermediate_edge,
+        max_frames_per_chunk=args.max_frames_per_chunk,
     )
 
 
