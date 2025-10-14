@@ -10,6 +10,7 @@ from __future__ import annotations
 import gc
 from pathlib import Path
 from typing import Optional, Tuple
+import time
 
 import gradio as gr
 import torch
@@ -149,8 +150,11 @@ def generate_video(
         negative_prompt=DEFAULT_NEGATIVE_PROMPT,
     )
 
+    t0 = time.time()
     try:
         outputs = run_inference(config, bundle)
+        t1 = time.time()
+        print(f"Inference time: {t1 - t0:.2f}s")
     except Exception as exc:  # noqa: BLE001 - surface errors in UI
         inference_logger.error("Inference failed", exc_info=True)
         _cleanup_after_generation()
