@@ -50,7 +50,7 @@ def get_total_gpu_memory():
 
 def get_device():
     if torch.cuda.is_available():
-        return "cuda"
+        return "cuda:0"
     elif torch.backends.mps.is_available():
         return "mps"
     return "cpu"
@@ -209,7 +209,7 @@ def create_ltx_video_pipeline(
     precision: str,
     text_encoder_model_name_or_path: str,
     sampler: Optional[str] = None,
-    device: Optional[str] = None,
+    device: Optional[Union[str, torch.device]] = None,
     enhance_prompt: bool = False,
     prompt_enhancer_image_caption_model_name_or_path: Optional[str] = None,
     prompt_enhancer_llm_model_name_or_path: Optional[str] = None,
@@ -218,6 +218,16 @@ def create_ltx_video_pipeline(
     assert os.path.exists(
         ckpt_path
     ), f"Ckpt path provided (--ckpt_path) {ckpt_path} does not exist"
+
+    if device is None:
+        if torch.cuda.is_available():
+            device = torch.device("cuda:0")
+        elif torch.backends.mps.is_available():
+            device = torch.device("mps")
+        else:
+            device = torch.device("cpu")
+    else:
+        device = torch.device(device)
 
     with safe_open(ckpt_path, framework="pt") as f:
         metadata = f.metadata()

@@ -1460,7 +1460,7 @@ class LTXVideoPipeline(DiffusionPipeline):
                     media_item.to(dtype=self.vae.dtype, device=self.vae.device),
                     self.vae,
                     vae_per_channel_normalize=vae_per_channel_normalize,
-                ).to(dtype=init_latents.dtype)
+                ).to(device=init_latents.device, dtype=init_latents.dtype)
 
                 # Handle the different conditioning cases
                 if media_frame_number == 0:

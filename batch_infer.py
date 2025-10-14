@@ -11,7 +11,7 @@ import copy
 import json
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional, Tuple
+from typing import Dict, Iterable, List, Optional, Tuple, Union
 
 import imageio
 import numpy as np
@@ -47,7 +47,7 @@ DEFAULT_TASKS: List[Dict[str, object]] = []
 class PipelineBundle:
     pipeline: object
     raw_config: Dict
-    device: str
+    device: Union[str, torch.device]
     model_path: str
     prompt_enhancer_image_caption_model_name: Optional[str]
     prompt_enhancer_llm_model_name: Optional[str]
@@ -101,6 +101,12 @@ def _ensure_prompt_enhancers(bundle: PipelineBundle, enhance_prompt: bool) -> No
     )
     llm_tokenizer = AutoTokenizer.from_pretrained(llm_name)
 
+    target_device = bundle.device
+    if not isinstance(target_device, torch.device):
+        target_device = torch.device(target_device)
+    caption_model = caption_model.to(target_device)
+    llm_model = llm_model.to(target_device)
+
     base_pipeline.prompt_enhancer_image_caption_model = caption_model
     base_pipeline.prompt_enhancer_image_caption_processor = caption_processor
     base_pipeline.prompt_enhancer_llm_model = llm_model
@@ -123,7 +129,12 @@ def get_pipeline_bundle(config_path: str) -> PipelineBundle:
     model_path = _resolve_model_path(config_dict["checkpoint_path"])
     inference_logger.info("Resolved checkpoint to %s", model_path)
 
-    device = "cuda" if torch.cuda.is_available() else ("mps" if torch.backends.mps.is_available() else "cpu")
+    if torch.cuda.is_available():
+        device = torch.device("cuda:0")
+    elif torch.backends.mps.is_available():
+        device = torch.device("mps")
+    else:
+        device = torch.device("cpu")
     inference_logger.info("Initializing pipeline on device %s", device)
     pipeline = create_ltx_video_pipeline(
         ckpt_path=model_path,
@@ -223,6 +234,7 @@ def run_inference(config: InferenceConfig, bundle: PipelineBundle) -> List[Path]
     prompt_word_count = len(config.prompt.split())
     enhance_prompt = prompt_threshold > 0 and prompt_word_count < prompt_threshold
     _ensure_prompt_enhancers(bundle, enhance_prompt)
+    base_pipeline = _get_base_pipeline(bundle.pipeline)
 
     conditioning_media_paths = config.conditioning_media_paths
     conditioning_strengths = config.conditioning_strengths
@@ -302,6 +314,17 @@ def run_inference(config: InferenceConfig, bundle: PipelineBundle) -> List[Path]
         else None
     )
 
+    if conditioning_items:
+        vae_device = getattr(getattr(base_pipeline, "vae", None), "device", None)
+        if vae_device is not None:
+            moved_any = False
+            for item in conditioning_items:
+                if hasattr(item, "media_item") and item.media_item.device != vae_device:
+                    item.media_item = item.media_item.to(vae_device)
+                    moved_any = True
+            if moved_any:
+                inference_logger.info("Moved conditioning media to %s", vae_device)
+
     skip_layer_strategy = _select_skip_layer_strategy(stg_mode)
     sample = {
         "prompt": config.prompt,
@@ -310,11 +333,13 @@ def run_inference(config: InferenceConfig, bundle: PipelineBundle) -> List[Path]
         "negative_prompt_attention_mask": None,
     }
 
-    base_pipeline = _get_base_pipeline(bundle.pipeline)
     execution_device = getattr(base_pipeline, "_execution_device", None)
     generator_device = execution_device if execution_device is not None else bundle.device
     if isinstance(generator_device, torch.device):
-        generator_device = generator_device if generator_device.index is not None else generator_device.type
+        if generator_device.type == "cuda" and generator_device.index is not None:
+            generator_device = f"cuda:{generator_device.index}"
+        else:
+            generator_device = generator_device.type
     if isinstance(generator_device, str) and generator_device.startswith("cuda") and not torch.cuda.is_available():
         generator_device = "cpu"
     if offload_to_cpu:
