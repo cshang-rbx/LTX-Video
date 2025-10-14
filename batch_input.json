@@ -1,0 +1,4 @@
+[
+  {"prompt": "smiling and turn away from camera, then run away", "image": "/home/jovyan/dev/LTX-Video/tests/utils/woman.jpeg"},
+  {"prompt": "a woman is turning sad then run away from camera", "image": "/home/jovyan/dev/LTX-Video/tests/utils/woman.jpeg"}
+]
