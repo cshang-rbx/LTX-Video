@@ -9,11 +9,12 @@ frame count, resolution, and frame rate.
 """
 
 import argparse
-import json
 import math
 import os
 import time
 from typing import Optional, Tuple
+from pathlib import Path
+import json
 
 import numpy as np
 import torch
@@ -159,6 +160,35 @@ def _make_stride_compatible(
     return video
 
 
+def _resolve_vae_checkpoint_path(path: str) -> str:
+    """Return a checkpoint location that `CausalVideoAutoencoder` can understand."""
+    candidate = Path(path)
+    if not candidate.exists() or not candidate.is_file() or candidate.suffix != ".safetensors":
+        return path
+
+    metadata_config = None
+    try:
+        with safe_open(str(candidate), framework="pt") as handle:
+            metadata = handle.metadata() or {}
+            metadata_config = metadata.get("config")
+    except Exception:
+        metadata_config = None
+
+    if metadata_config:
+        return path
+
+    parent = candidate.parent
+    if (parent / "config.json").is_file():
+        return str(parent)
+
+    if parent.name == "vae":
+        root = parent.parent
+        if root != parent and (root / "vae" / "config.json").is_file():
+            return str(root)
+
+    return path
+
+
 def _extract_default_fps(ckpt_path: str) -> Optional[float]:
     """Read checkpoint metadata to find a default FPS if available."""
     if not os.path.isfile(ckpt_path):
@@ -222,7 +252,8 @@ def run_reconstruction(
     timings["input_loading"] = time.perf_counter() - load_start
 
     model_start = time.perf_counter()
-    vae = CausalVideoAutoencoder.from_pretrained(ckpt_path)
+    resolved_ckpt = _resolve_vae_checkpoint_path(ckpt_path)
+    vae = CausalVideoAutoencoder.from_pretrained(resolved_ckpt)
     dtype = torch.bfloat16 if use_bfloat16 else torch.float32
     vae = vae.to(device=device, dtype=dtype)
     vae.eval()
