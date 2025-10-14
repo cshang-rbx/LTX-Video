@@ -179,7 +179,7 @@ def _resolve_vae_checkpoint_path(path: str) -> str:
 
     parent = candidate.parent
     if (parent / "config.json").is_file():
-        return str(parent)
+        return str(candidate.parent.parent)
 
     if parent.name == "vae":
         root = parent.parent
@@ -253,6 +253,7 @@ def run_reconstruction(
 
     model_start = time.perf_counter()
     resolved_ckpt = _resolve_vae_checkpoint_path(ckpt_path)
+    print(f"{resolved_ckpt=} {ckpt_path=}")
     vae = CausalVideoAutoencoder.from_pretrained(resolved_ckpt)
     dtype = torch.bfloat16 if use_bfloat16 else torch.float32
     vae = vae.to(device=device, dtype=dtype)
