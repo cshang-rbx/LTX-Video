@@ -9,12 +9,12 @@ frame count, resolution, and frame rate.
 """
 
 import argparse
+import json
 import math
 import os
 import time
-from typing import Optional, Tuple
 from pathlib import Path
-import json
+from typing import Optional, Tuple
 
 import numpy as np
 import torch
@@ -189,6 +189,30 @@ def _resolve_vae_checkpoint_path(path: str) -> str:
     return path
 
 
+def _determine_preprocess_size(
+    orig_size: Tuple[int, int],
+    explicit_resize: Optional[Tuple[int, int]],
+    max_intermediate_edge: Optional[int],
+) -> Optional[Tuple[int, int]]:
+    """Pick a target spatial size while preserving aspect ratio."""
+    if explicit_resize is not None:
+        width, height = explicit_resize
+    else:
+        width, height = orig_size
+
+    if max_intermediate_edge and max_intermediate_edge > 0:
+        longer_edge = max(width, height)
+        if longer_edge > max_intermediate_edge:
+            scale = max_intermediate_edge / float(longer_edge)
+            width = max(1, int(round(width * scale)))
+            height = max(1, int(round(height * scale)))
+
+    target_size = (width, height)
+    if target_size == orig_size:
+        return explicit_resize
+    return target_size
+
+
 def _extract_default_fps(ckpt_path: str) -> Optional[float]:
     """Read checkpoint metadata to find a default FPS if available."""
     if not os.path.isfile(ckpt_path):
@@ -242,6 +266,7 @@ def run_reconstruction(
     stride_compat: str = "pad",
     resize: Optional[Tuple[int, int]] = None,
     use_bfloat16: bool = False,
+    max_intermediate_edge: Optional[int] = 1536,
 ) -> None:
     timings = {}
 
@@ -264,7 +289,12 @@ def run_reconstruction(
     spatial_stride = getattr(vae, "spatial_downscale_factor", 1)
 
     preprocess_start = time.perf_counter()
-    video_proc = _resize_video(video_cpu, resize)
+    target_size = _determine_preprocess_size(
+        orig_size=orig_size,
+        explicit_resize=resize,
+        max_intermediate_edge=max_intermediate_edge,
+    )
+    video_proc = _resize_video(video_cpu, target_size)
     video_proc = _make_stride_compatible(
         video_proc, temporal_stride, spatial_stride, stride_compat
     )
@@ -368,6 +398,15 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Run the VAE in bfloat16 for reduced memory usage.",
     )
+    parser.add_argument(
+        "--max-intermediate-edge",
+        type=int,
+        default=1536,
+        help=(
+            "Downscale so the longer spatial edge does not exceed this size before encoding. "
+            "Set to 0 to disable automatic downscaling."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -396,6 +435,7 @@ def main() -> None:
         stride_compat=args.stride_compat,
         resize=resize,
         use_bfloat16=args.bfloat16,
+        max_intermediate_edge=args.max_intermediate_edge,
     )
 
 
