@@ -284,6 +284,9 @@ def run_reconstruction(
     dtype = torch.bfloat16 if use_bfloat16 else torch.float32
     vae = vae.to(device=device, dtype=dtype)
     vae.eval()
+    num_params = sum(p.numel() for p in vae.parameters())
+    # print(vae)
+    print(f"LTX parameters: {num_params / 10**6: .2f}M")
     timings["model_loading"] = time.perf_counter() - model_start
 
     temporal_stride = getattr(vae, "temporal_downscale_factor", 1)
